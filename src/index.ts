@@ -20,7 +20,16 @@ const PORT = Number(process.env.PORT ?? '4100');
 // GraphQL schema, mounted at /metadata — NOT the main /graphql endpoint, which only
 // serves workspace-data resolvers (confirmed via schema introspection on this VM).
 const TWENTY_GRAPHQL_URL = requireEnv('TWENTY_GRAPHQL_URL');
-const BOOTSTRAP_SHARED_SECRET = requireEnv('BOOTSTRAP_SHARED_SECRET');
+const BOOTSTRAP_API_KEY = requireEnv('BOOTSTRAP_API_KEY');
+
+// Cloudflare Tunnel forwards the full original path unchanged (it does not strip a
+// matched path prefix), so this must match exactly what the Public Hostname path rule
+// for thsbusiness.plac.app is configured to forward here. See README for the exact
+// Cloudflare Zero Trust dashboard setup.
+const BOOTSTRAP_PATH = '/plac-bootstrap/internal/bootstrap';
+// Unauthenticated on purpose (standard for a health check) — reveals only that the
+// service is up, nothing sensitive, so it's safe to leave open on the public hostname.
+const PING_PATH = '/plac-bootstrap/ping';
 
 // ---------------------------------------------------------------------------
 // Twenty GraphQL contract
@@ -273,13 +282,13 @@ function validateRequestBody(body: unknown): { ok: true; value: BootstrapInput }
 // ---------------------------------------------------------------------------
 
 function isAuthorized(req: IncomingMessage): boolean {
-  const provided = req.headers['x-bootstrap-secret'];
+  const provided = req.headers['x-api-key'];
   if (typeof provided !== 'string') {
     return false;
   }
 
   const providedBuf = Buffer.from(provided);
-  const expectedBuf = Buffer.from(BOOTSTRAP_SHARED_SECRET);
+  const expectedBuf = Buffer.from(BOOTSTRAP_API_KEY);
 
   if (providedBuf.length !== expectedBuf.length) {
     return false;
@@ -325,7 +334,12 @@ const server = createServer((req, res) => {
 });
 
 async function handleRequest(req: IncomingMessage, res: ServerResponse): Promise<void> {
-  if (req.method !== 'POST' || req.url !== '/internal/bootstrap') {
+  if (req.method === 'GET' && req.url === PING_PATH) {
+    sendJson(res, 200, { status: 'ok', service: 'plac-bootstrap' });
+    return;
+  }
+
+  if (req.method !== 'POST' || req.url !== BOOTSTRAP_PATH) {
     sendJson(res, 404, { error: 'not_found' });
     return;
   }
